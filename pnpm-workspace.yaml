@@ -1,0 +1,5 @@
+# Allow pnpm to run the build scripts of our dev/runtime tools. Electron
+# downloads its native binaries in `postinstall`; without an explicit
+# allowance pnpm 11 exits non-zero under its default `strictDepBuilds`.
+allowBuilds:
+  electron: true

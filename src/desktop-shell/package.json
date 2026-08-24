@@ -1,0 +1,25 @@
+{
+  "name": "@dsh-desktop/shell",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Desktop shell plugin for DeepSeek Harness: host-side services plus an in-harness settings page and live stats.",
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^5.5.0"
+  }
+}

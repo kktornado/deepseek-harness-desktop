@@ -1,0 +1,7 @@
+node_modules/
+dist/
+runtime/
+src/desktop-shell/lib/client.js
+src/desktop-shell/lib/client.js.map
+*.log
+.npmrc

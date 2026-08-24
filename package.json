@@ -1,0 +1,98 @@
+{
+  "name": "deepseek-harness-desktop",
+  "version": "0.1.2",
+  "description": "Zero-dependency desktop wrapper for DeepSeek Harness: bundled Node runtime, npm-based engine updates, plugin-based shell",
+  "main": "src/main.js",
+  "author": "deepseek-harness-desktop contributors <maintainers@deepseek-harness-desktop.invalid>",
+  "homepage": "https://github.com/kktornado/deepseek-harness-desktop",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "download:node": "node scripts/fetch-node.mjs",
+    "download:pnpm": "node scripts/fetch-pnpm.mjs",
+    "download:runtimes": "node scripts/fetch-node.mjs && node scripts/fetch-pnpm.mjs",
+    "build:client": "node scripts/build-shell-client.mjs",
+    "build:win": "node scripts/fetch-node.mjs && node scripts/fetch-pnpm.mjs && node scripts/build-shell-client.mjs && electron-builder --win nsis portable",
+    "build:linux": "node scripts/fetch-node.mjs && node scripts/fetch-pnpm.mjs && node scripts/build-shell-client.mjs && electron-builder --linux AppImage deb",
+    "build:mac": "node scripts/fetch-node.mjs && node scripts/fetch-pnpm.mjs && node scripts/build-shell-client.mjs && electron-builder --mac dmg zip",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.2",
+    "png-to-ico": "^3.0.2",
+    "rcedit": "^5.0.2",
+    "sharp": "^0.35.3",
+    "yauzl": "^2.10.0"
+  },
+  "build": {
+    "appId": "com.deepseek.dsh-desktop",
+    "productName": "DeepSeek Harness Desktop",
+    "artifactName": "DeepSeek-Harness-Desktop-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime/node",
+        "to": "node"
+      },
+      {
+        "from": "runtime/pnpm",
+        "to": "pnpm"
+      },
+      {
+        "from": "src/desktop-shell",
+        "to": "desktop-shell"
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "kktornado",
+      "repo": "deepseek-harness-desktop"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "artifactName": "DeepSeek-Harness-Desktop-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "DeepSeek-Harness-Desktop-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "portable": {
+      "artifactName": "DeepSeek-Harness-Desktop-${version}-portable.${ext}"
+    },
+    "afterPack": "scripts/after-pack.js"
+  }
+}
