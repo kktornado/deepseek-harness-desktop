@@ -18,7 +18,11 @@ export const name = '@dsh-desktop/shell'
 export const inject = ['slots']
 
 export function apply(ctx: any): void {
-  ctx.slots.register(
+  // The slot is declared by the harness's ui-settings base, whose plugin may
+  // load after this one. `inject` waits on the declaration (and reruns after a
+  // redeclaration), while a bare register into an undeclared slot fails the
+  // plugin load — the engine's own settings plugins use this same pattern.
+  ctx.slots.inject('settings.section', () => ctx.slots.register(
     {
       name: 'settings.section',
       id: 'desktop-shell',
@@ -26,7 +30,7 @@ export function apply(ctx: any): void {
       label: '桌面壳',
     },
     (props: any) => createElement(SettingsPage, props),
-  )
+  ))
 }
 
 export default { name, inject, apply }
