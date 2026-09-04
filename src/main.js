@@ -337,75 +337,71 @@ function startService(version) {
     finish()
     return
   }
-  // The harness URL is known the moment we decide to spawn, so open the main
-  // window immediately (the harness page shows its own loading state). Only
-  // first-run installs go through the splash first; a normal launch never
-  // flashes it.
-  setState({
-    serviceRunning: false,
-    error: undefined,
-    serviceUrl: `http://127.0.0.1:${engine.state.port}`,
-  })
   log(`[engine] starting harness v${version} (port ${engine.state.port})`)
   engine.spawnWeb(version)
   reloadedForService = false
-  // Open the main window immediately (the harness page shows its own loading
-  // state) so an already-installed engine launches without flashing a splash.
-  // First-run installs go through the splash (see boot) and reach here only
-  // after the engine is on disk.
-  openUi()
+  // The UI window opens only once the harness prints its authenticated URL
+  // (waitForService → openUi): newer engines require the per-process launch
+  // token carried by that URL, so loading the bare origin first would flash
+  // the 401 auth page. First-run installs still go through the splash.
   waitForService().finally(finish)
 }
 
 let reloadedForService = false
 
 function waitForService() {
-  const deadline = Date.now() + 90000
   return new Promise((resolve) => {
-    const tick = async () => {
-      if (quitting) { resolve(); return }
-      const health = await engine.healthCheck()
-      if (health.ok && health.isHarness) {
-        serviceStartedOk = true
-        restartAttempts = 0
-        setState({
-          serviceRunning: true,
-          serviceUrl: `http://127.0.0.1:${engine.state.port}`,
-          error: undefined,
-        })
-        log(`[engine] harness ready at http://127.0.0.1:${engine.state.port}`)
-        // Open the harness window (destroys the splash) once the service is
-        // up, so the user sees a progress bar during boot instead of a blank
-        // window. On a restart the window already exists; openUi won't
-        // resurrect one the user hid.
-        openUi()
-        // The window may have been opened before the harness was listening
-        // (older flow); reload once per service start to get the real page.
-        if (uiWindow && !uiWindow.isDestroyed() && !reloadedForService) {
-          reloadedForService = true
-          uiWindow.webContents.reload()
-        }
-        resolve()
-        return
-      }
-      if (health.ok && !health.isHarness) {
-        // Something else owns the port: report and stop waiting.
-        const error = `端口 ${engine.state.port} 被其他程序占用（非 DeepSeek Harness 页面）`
-        log(`[engine] ${error}`)
-        setState({ serviceRunning: false, error })
-        resolve()
-        return
-      }
-      if (Date.now() > deadline) {
-        const error = '服务启动超时（90 秒），请查看日志'
-        log(`[engine] ${error}`)
-        setState({ serviceRunning: false, error })
-        resolve()
-        return
-      }
-      setTimeout(tick, 500)
+    let settled = false
+    let deadlineTimer = undefined
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+      engine.off('url', onUrl)
+      resolve()
     }
-    tick()
+    const onUrl = (url) => {
+      if (settled) return
+      serviceStartedOk = true
+      restartAttempts = 0
+      setState({ serviceRunning: true, serviceUrl: url, error: undefined })
+      log(`[engine] harness ready at ${url}`)
+      // Open the harness window (destroys the splash) at the authenticated
+      // URL. On a restart the window already exists; openUi won't resurrect
+      // one the user hid.
+      openUi()
+      // Reload once per service start so the window lands on the real page
+      // (its previous load may predate the launch-token exchange).
+      if (uiWindow && !uiWindow.isDestroyed() && !reloadedForService) {
+        reloadedForService = true
+        uiWindow.webContents.reload()
+      }
+      finish()
+    }
+    const fail = (message) => {
+      if (settled) return
+      if (quitting) { finish(); return }
+      log(`[engine] ${message}`)
+      setState({ serviceRunning: false, error: message })
+      ensureSplash()
+      sendSplashStatus(message, 100)
+      finish()
+    }
+    // The `dsh web:` URL line is the harness's own readiness signal; the
+    // token URL can arrive before this listener attaches, so check first.
+    if (engine.authenticatedUrl !== undefined) {
+      onUrl(engine.authenticatedUrl)
+      return
+    }
+    engine.on('url', onUrl)
+    deadlineTimer = setTimeout(async () => {
+      const health = await engine.healthCheck()
+      if (health.ok && !health.isHarness) {
+        fail(`端口 ${engine.state.port} 被其他程序占用（非 DeepSeek Harness 页面）`)
+      } else {
+        fail('服务启动超时（90 秒），请查看日志')
+      }
+    }, 90000)
   })
 }
 

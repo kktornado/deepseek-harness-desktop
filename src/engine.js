@@ -94,6 +94,12 @@ class EngineManager extends EventEmitter {
     this.statePath = path.join(this.root, 'state.json')
     this.state = this.loadState()
     this.child = undefined
+    // The authenticated browser URL printed by the running harness
+    // (`dsh web: <url>`), carrying the per-process launch token. Newer engine
+    // versions mint the token at every spawn and refuse any browser request
+    // that does not carry it or a cookie issued from it; the desktop window
+    // must load this URL, not the bare origin.
+    this.authenticatedUrl = undefined
   }
 
   // ── state ────────────────────────────────────────────────────────────────
@@ -587,17 +593,55 @@ class EngineManager extends EventEmitter {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
-    child.stdout.on('data', (chunk) => this.log.log(`[engine:${version}] ${chunk.toString().trimEnd()}`))
+    child.stdout.setEncoding('utf8')
+    let stdoutBuffer = ''
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk
+      let newlineIndex
+      while ((newlineIndex = stdoutBuffer.indexOf('\n')) !== -1) {
+        const line = stdoutBuffer.slice(0, newlineIndex)
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1)
+        this.handleEngineLine(version, line)
+      }
+    })
+    child.stdout.on('end', () => {
+      if (stdoutBuffer !== '') this.handleEngineLine(version, stdoutBuffer)
+      stdoutBuffer = ''
+    })
     child.stderr.on('data', (chunk) => this.log.log(`[engine:${version}:err] ${chunk.toString().trimEnd()}`))
     child.on('exit', (code, signal) => this.emit('exit', { code, signal, version }))
     this.child = child
     return child
   }
 
+  /**
+   * Log one harness stdout line and watch for the readiness signal.
+   * `dsh web` prints its authenticated URL (`dsh web: <url>`, the launch-token
+   * form of the root origin) once the Loader tree settles and the server is
+   * listening; supervisors that hand the URL to a browser use that line as the
+   * readiness signal. Each process mints a fresh token, so the captured URL
+   * changes on every spawn and is the only way to open an authenticated window.
+   * Older engines print the bare origin — the same pattern matches either.
+   * @param {string} version - the running engine version.
+   * @param {string} line - one stdout line without its trailing newline.
+   */
+  handleEngineLine(version, line) {
+    const trimmed = line.trimEnd()
+    if (trimmed !== '') this.log.log(`[engine:${version}] ${trimmed}`)
+    const match = /^dsh web: (https?:\/\/\S+)/u.exec(trimmed)
+    if (match === null) return
+    const url = match[1]
+    if (this.authenticatedUrl !== url) {
+      this.authenticatedUrl = url
+      this.emit('url', url)
+    }
+  }
+
   /** Stop the running harness subprocess and its process tree. */
   async stopWeb() {
     const child = this.child
     this.child = undefined
+    this.authenticatedUrl = undefined
     if (child === undefined) return
     if (process.platform === 'win32' && child.pid !== undefined) {
       await new Promise((resolve) => {
@@ -652,16 +696,24 @@ class EngineManager extends EventEmitter {
 
   /**
    * Health-check a harness instance on the loopback port.
+   * Uses the authenticated URL when this process has one, so the check passes
+   * through the launch-token exchange; a bare-origin probe of a newer engine
+   * answers 401 with the auth message, which still proves a harness owns the
+   * port (used to distinguish "harness running" from "unrelated program").
    * @param {number} port - port to probe.
    * @returns {Promise<{ ok: boolean, isHarness: boolean }>}
    */
   async healthCheck(port = this.state.port) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, {
+      const url = this.authenticatedUrl !== undefined
+        ? this.authenticatedUrl
+        : `http://127.0.0.1:${port}/`
+      const res = await fetch(url, {
         signal: AbortSignal.timeout(1500),
       })
       const body = await res.text()
-      return { ok: res.ok, isHarness: body.includes('__DSH_BOOT__') }
+      const isHarness = body.includes('__DSH_BOOT__') || body.includes('dsh web authentication required')
+      return { ok: res.ok || res.status === 401, isHarness }
     } catch {
       return { ok: false, isHarness: false }
     }
