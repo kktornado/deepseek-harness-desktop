@@ -3,6 +3,16 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；每个发布版对应一个 git tag（`v*`）。
 
+## [Unreleased]
+
+## [0.1.4] - 2026-09-04
+
+### 修复
+
+- 下载进度：壳更新（electron-updater `download-progress`）和设置页「立即安装」引擎时显示进度 splash（真实百分比或不定进度动画），下载不再表现为无反馈的空白界面
+- 修复 splash 状态丢失：splash 页未加载完就发送的状态消息会缓存并在页面就绪后重放，避免停留在「正在启动…」
+- 引擎安装期间无百分比时改用滑动的不定进度条，不再卡在 0%
+
 ## [0.1.3] - 2026-09-04
 
 ### 修复

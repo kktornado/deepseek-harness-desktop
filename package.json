@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Zero-dependency desktop wrapper for DeepSeek Harness: bundled Node runtime, npm-based engine updates, plugin-based shell",
   "main": "src/main.js",
   "author": "deepseek-harness-desktop contributors <maintainers@deepseek-harness-desktop.invalid>",

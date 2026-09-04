@@ -86,14 +86,20 @@ function pushState() {
 
 /**
  * Push a status line + progress percentage into the splash window.
+ * Status is buffered so a message sent before the splash page finished
+ * loading is replayed once the renderer is ready (the first status after
+ * ensureSplash used to be lost, leaving a static "正在启动…" page).
  * @param {string} message
- * @param {number} [progress] - 0..100.
+ * @param {number} [progress] - 0..100, or undefined for indeterminate.
  */
 function sendSplashStatus(message, progress) {
+  pendingSplashStatus = { message, progress, error: state.error }
   if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.webContents.send('dsh:splash:status', { message, progress, error: state.error })
+    splashWindow.webContents.send('dsh:splash:status', pendingSplashStatus)
   }
 }
+
+let pendingSplashStatus = undefined
 
 /** Dark splash page with a progress bar shown while the app boots. */
 const SPLASH_HTML = `<!doctype html>
@@ -107,7 +113,9 @@ const SPLASH_HTML = `<!doctype html>
     h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.02em; }
     .sub { font-size: 13px; color: #9aa4b2; max-width: 360px; line-height: 1.5; }
     .track { width: 300px; height: 6px; border-radius: 3px; background: #232a35; overflow: hidden; }
-    .bar { height: 100%; width: 0%; border-radius: 3px; background: #4d7cfe; transition: width 0.3s ease; }
+    .bar { height: 100%; width: 0%; border-radius: 3px; background: #4d7cfe; transition: width 0.3s ease; transform: none; }
+    .bar.indeterminate { width: 30%; animation: dsh-slide 1.2s ease-in-out infinite; }
+    @keyframes dsh-slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
     .pct { font-size: 12px; color: #9aa4b2; }
     .err { color: #e07c7c; }
   </style>
@@ -129,7 +137,13 @@ const SPLASH_HTML = `<!doctype html>
         if (payload.message) status.textContent = payload.message
         if (typeof payload.progress === 'number') {
           bar.style.width = payload.progress + '%'
+          bar.classList.remove('indeterminate')
           pct.textContent = Math.round(payload.progress) + '%'
+        } else if (payload.message) {
+          // No numeric progress available: show an animated indeterminate bar
+          // instead of a stuck 0%.
+          bar.classList.add('indeterminate')
+          pct.textContent = '…'
         }
         if (payload.error) {
           status.classList.add('err')
@@ -181,6 +195,12 @@ function createSplashWindow() {
     splashWindow.focus()
   })
   splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML))
+  // Replay the latest buffered status once the page (and its listener) is up.
+  splashWindow.webContents.on('did-finish-load', () => {
+    if (pendingSplashStatus !== undefined) {
+      splashWindow.webContents.send('dsh:splash:status', pendingSplashStatus)
+    }
+  })
   return splashWindow
 }
 
@@ -475,22 +495,32 @@ async function checkRegistry() {
 }
 
 /**
- * Background auto-update: download a newer engine version WITHOUT restarting
- * (so a launch or a running session is never blocked by the download). When
- * the download finishes, `pendingUpdate` is set and the settings UI shows a
+ * Auto-update: download a newer engine version WITHOUT restarting (so a
+ * launch or a running session is never blocked by the download). When the
+ * download finishes, `pendingUpdate` is set and the settings UI shows a
  * "重启生效" prompt; the harness keeps running on the current version until
  * then, and the next launch picks the new version automatically.
+ * Startup auto-checks call this without progress UI; the settings "立即安装"
+ * button opts into a progress splash.
  * @param {string} version - target engine version.
+ * @param {{ showProgress?: boolean }} [options] - show the download splash.
  */
-async function autoUpdateEngine(version) {
+async function autoUpdateEngine(version, options = {}) {
   if (state.installing !== undefined) return
-  log(`[engine] background auto-update to v${version}…`)
+  const showProgress = options.showProgress === true
+  log(`[engine] ${showProgress ? '' : 'background '}auto-update to v${version}…`)
+  if (showProgress) {
+    ensureSplash()
+    sendSplashStatus(`正在下载引擎 v${version}…`, 0)
+  }
   try {
     await installEngine(version)
     setState({ pendingUpdate: version })
     log(`[engine] v${version} downloaded; restart to apply`)
   } catch (error) {
     log(`[engine] auto-update failed: ${String(error)}`)
+  } finally {
+    if (showProgress) destroySplash()
   }
 }
 
@@ -512,13 +542,26 @@ async function applyPendingUpdate() {
 async function installEngine(version) {
   setState({ installing: version })
   log(`[engine] installing v${version} …`)
+  // Refresh the splash (indeterminate progress) while the install runs. The
+  // status call no-ops when no splash is visible, so a background auto-download
+  // stays quiet and only foreground installs (boot / version switch) animate.
+  let lastProgressAt = 0
   try {
-    await engine.install(version, (line) => log(`[pnpm] ${line.trimEnd()}`))
+    await engine.install(version, (line) => {
+      log(`[pnpm] ${line.trimEnd()}`)
+      const now = Date.now()
+      if (now - lastProgressAt >= 500) {
+        lastProgressAt = now
+        sendSplashStatus(`正在下载并安装引擎 v${version}…`)
+      }
+    })
+    sendSplashStatus(`引擎 v${version} 安装完成`, 100)
     log(`[engine] v${version} installed`)
   } catch (error) {
     const message = `引擎安装失败: ${String(error)}`
     log(`[engine] ${message}`)
     setState({ installing: undefined, error: message })
+    sendSplashStatus(message, 100)
     throw error
   } finally {
     if (state.installing === version) setState({ installing: undefined })
@@ -582,9 +625,18 @@ function setupShellUpdater() {
       })
     })
     autoUpdater.on('update-not-available', () => log('[shell] no update available'))
-    autoUpdater.on('error', (error) => log(`[shell] updater error: ${String(error)}`))
+    autoUpdater.on('error', (error) => {
+      log(`[shell] updater error: ${String(error)}`)
+      destroySplash()
+    })
+    autoUpdater.on('download-progress', (progress) => {
+      const percent = typeof progress.percent === 'number' ? Math.round(progress.percent) : 0
+      log(`[shell] download ${percent}%`)
+      sendSplashStatus(`正在下载新版本… ${percent}%`, percent)
+    })
     autoUpdater.on('update-downloaded', () => {
       log('[shell] update downloaded')
+      sendSplashStatus('下载完成，准备安装…', 100)
       dialog.showMessageBox({
         type: 'info',
         title: '更新已就绪',
@@ -594,6 +646,8 @@ function setupShellUpdater() {
         if (response === 0) {
           quitting = true
           autoUpdater.quitAndInstall()
+        } else {
+          destroySplash()
         }
       })
     })
@@ -605,10 +659,13 @@ function setupShellUpdater() {
 
 async function downloadShellUpdate() {
   if (!autoUpdater) return
+  ensureSplash()
+  sendSplashStatus('正在下载新版本…', 0)
   try {
     await autoUpdater.downloadUpdate()
   } catch (error) {
     log(`[shell] download failed: ${String(error)}`)
+    destroySplash()
   }
 }
 
@@ -644,9 +701,8 @@ function registerIpc() {
   ipcMain.handle('dsh:getAvailableVersions', () => state.availableVersions)
   ipcMain.handle('dsh:updateEngine', async () => {
     if (state.installing || state.latestVersion === undefined) return
-    // Background download: install the newer version without restarting; the
-    // settings UI shows a "重启生效" prompt when done.
-    await autoUpdateEngine(state.latestVersion)
+    // User-initiated install from the settings page: show the download splash.
+    await autoUpdateEngine(state.latestVersion, { showProgress: true })
   })
   ipcMain.handle('dsh:applyPendingUpdate', () => applyPendingUpdate())
   ipcMain.handle('dsh:switchVersion', (_event, version) => switchVersion(String(version)))
