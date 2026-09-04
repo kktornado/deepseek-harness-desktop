@@ -3,7 +3,7 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；每个发布版对应一个 git tag（`v*`）。
 
-## [Unreleased]
+## [0.1.3] - 2026-09-04
 
 ### 修复
 
